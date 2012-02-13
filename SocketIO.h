@@ -7,7 +7,7 @@
 //  by Fred Potter <fpotter@pieceable.com>
 //
 //  using
-//  https://github.com/erichocean/cocoa-websocket
+//  https://github.com/square/SocketRocket
 //  http://regexkit.sourceforge.net/RegexKitLite/
 //  https://github.com/stig/json-framework/
 //  http://allseeing-i.com/ASIHTTPRequest/
@@ -20,7 +20,7 @@
 
 #import <Foundation/Foundation.h>
 
-@class WebSocket;
+@class SRWebSocket;
 @class SocketIO;
 @class SocketIOPacket;
 
@@ -40,7 +40,7 @@ typedef void(^SocketIOCallback)(id argsData);
 
 @interface SocketIO : NSObject 
 {
-    @private
+@private
     NSString *_host;
     NSInteger _port;
     NSString *_sid;
@@ -48,7 +48,7 @@ typedef void(^SocketIOCallback)(id argsData);
     
     id<SocketIODelegate> _delegate;
     
-    WebSocket *_webSocket;
+    SRWebSocket *_webSocket;
     
     BOOL _isConnected;
     BOOL _isConnecting;
@@ -93,7 +93,7 @@ typedef void(^SocketIOCallback)(id argsData);
     NSArray *args;
     NSString *endpoint;
     
-    @private
+@private
     NSArray *_types;
 }
 

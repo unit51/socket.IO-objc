@@ -7,7 +7,7 @@
 //  by Fred Potter <fpotter@pieceable.com>
 //
 //  using
-//  https://github.com/erichocean/cocoa-websocket
+//  https://github.com/square/SocketRocket
 //  http://regexkit.sourceforge.net/RegexKitLite/
 //  https://github.com/stig/json-framework/
 //  http://allseeing-i.com/ASIHTTPRequest/
@@ -21,9 +21,11 @@
 #import "SocketIO.h"
 
 #import "ASIHTTPRequest.h"
-#import "WebSocket.h"
+#import "SRWebSocket.h"
 #import "RegexKitLite.h"
-#import "SBJson.h"
+#import "SBJSON.h"
+#import "NSObject+SBJSON.h"
+#import "NSString+SBJSON.h"
 
 #define DEBUG_LOGS 1
 #define HANDSHAKE_URL @"http://%@:%d/socket.io/1/?t=%d%@"
@@ -33,7 +35,7 @@
 # pragma mark -
 # pragma mark SocketIO's private interface
 
-@interface SocketIO (FP_Private) <WebSocketDelegate>
+@interface SocketIO (FP_Private) <SRWebSocketDelegate>
 
 - (void) log:(NSString *)message;
 
@@ -91,7 +93,7 @@
     {
         _isConnecting = YES;
         
-        _host = [host retain];
+        _host = host;
         _port = port;
         _endpoint = [endpoint copy];
         
@@ -105,8 +107,7 @@
         NSString *s = [NSString stringWithFormat:HANDSHAKE_URL, _host, _port, rand(), query];
         [self log:[NSString stringWithFormat:@"Connecting to socket with URL: %@",s]];
         NSURL *url = [NSURL URLWithString:s];
-        [query release];
-                
+        
         ASIHTTPRequest *request = [ASIHTTPRequest requestWithURL:url];
         [request setDelegate:self];
         [request startAsynchronous];
@@ -129,7 +130,6 @@
     packet.data = data;
     packet.pId = [self addAcknowledge:function];
     [self send:packet];
-    [packet release];
 }
 
 - (void) sendJSON:(NSDictionary *)data
@@ -143,7 +143,6 @@
     packet.data = [data JSONRepresentation];
     packet.pId = [self addAcknowledge:function];
     [self send:packet];
-    [packet release];
 }
 
 - (void) sendEvent:(NSString *)eventName withData:(NSDictionary *)data
@@ -165,7 +164,6 @@
         packet.ack = @"data";
     }
     [self send:packet];
-    [packet release];
 }
 
 - (void)sendAcknowledgement:(NSString *)pId withArgs:(NSArray *)data {
@@ -173,9 +171,8 @@
     packet.data = [data JSONRepresentation];
     packet.pId = pId;
     packet.ack = @"data";
-
+    
     [self send:packet];
-    [packet release];
 }
 
 # pragma mark -
@@ -183,36 +180,35 @@
 
 - (void) openSocket
 {
-    NSString *url = [NSString stringWithFormat:SOCKET_URL, _host, _port, _sid];
+    NSString * urlString = [NSString stringWithFormat:SOCKET_URL, _host, _port, _sid];
+    NSURL * url = [NSURL URLWithString:urlString];
+    NSURLRequest * urlRequest = [NSURLRequest requestWithURL:url];
     
-    [_webSocket release];
+    [_webSocket close];
     _webSocket = nil;
     
-    _webSocket = [[WebSocket alloc] initWithURLString:url delegate:self];
-    [self log:[NSString stringWithFormat:@"Opening %@", url]];
+    _webSocket = [[SRWebSocket alloc] initWithURLRequest:urlRequest];
+    _webSocket.delegate = self;
     [_webSocket open];
-    
+    [self log:[NSString stringWithFormat:@"Opening %@", urlString]];
 }
 
 - (void) sendDisconnect
 {
     SocketIOPacket *packet = [[SocketIOPacket alloc] initWithType:@"disconnect"];
     [self send:packet];
-    [packet release];
 }
 
 - (void) sendConnect
 {
     SocketIOPacket *packet = [[SocketIOPacket alloc] initWithType:@"connect"];
     [self send:packet];
-    [packet release];
 }
 
 - (void) sendHeartbeat
 {
     SocketIOPacket *packet = [[SocketIOPacket alloc] initWithType:@"heartbeat"];
     [self send:packet];
-    [packet release];
 }
 
 - (void) send:(SocketIOPacket *)packet
@@ -300,24 +296,24 @@
         //
         switch (idx) 
         {
-            case 0:
+            case 0: {
                 [self log:@"disconnect"];
                 [self onDisconnect];
                 break;
-                
-            case 1:
+            }    
+            case 1: {
                 [self log:@"connect"];
                 // from socket.io.js ... not sure when data will contain sth?! 
                 // packet.qs = data || '';
                 [self onConnect:packet];
                 break;
-                
-            case 2:
+            }    
+            case 2: {
                 [self log:@"heartbeat"];
                 [self sendHeartbeat];
                 break;
-                
-            case 3:
+            }
+            case 3: {
                 [self log:@"message"];
                 if (packet.data && ![packet.data isEqualToString:@""])
                 {
@@ -327,8 +323,8 @@
                     }
                 }
                 break;
-                
-            case 4:
+            }    
+            case 4: {
                 [self log:@"json"];
                 if (packet.data && ![packet.data isEqualToString:@""])
                 {
@@ -338,8 +334,8 @@
                     }
                 }
                 break;
-                
-            case 5:
+            }
+            case 5: {
                 [self log:@"event"];
                 if (packet.data && ![packet.data isEqualToString:@""])
                 { 
@@ -352,8 +348,8 @@
                     }
                 }
                 break;
-                
-            case 6:
+            }
+            case 6: {
                 [self log:@"ack"];
                 NSArray *pieces = [packet.data arrayOfCaptureComponentsMatchedByRegex:regexPieces];
                 
@@ -385,21 +381,20 @@
                 }
                 
                 break;
-               
-            case 7:
+            } 
+            case 7: {
                 [self log:@"error"];
                 break;
-                
-            case 8:
+            }
+            case 8: {
                 [self log:@"noop"];
                 break;
-                
-            default:
+            }
+            default: {
                 [self log:@"command not found or not yet supported"];
                 break;
+            }
         }
-
-        [packet release];
     }
     else
     {
@@ -426,7 +421,7 @@
     [self log:@"onConnect()"];
     
     _isConnected = YES;
-
+    
     // Send the connected packet so the server knows what it's dealing with.
     // Only required when endpoint/namespace is present
     if ([_endpoint length] > 0) {
@@ -469,7 +464,7 @@
     }
     
     // Disconnect the websocket, just in case
-    if (_webSocket != nil && [_webSocket connected]) {
+    if (_webSocket != nil && _webSocket.readyState != SR_CLOSED ) {
         [_webSocket close];
     }
     
@@ -514,15 +509,14 @@
     if (_timeout != nil) 
     {   
         [_timeout invalidate];
-        [_timeout release];
         _timeout = nil;
     }
     
-    _timeout = [[NSTimer scheduledTimerWithTimeInterval:_heartbeatTimeout
+    _timeout = [NSTimer scheduledTimerWithTimeInterval:_heartbeatTimeout
                                                 target:self 
                                               selector:@selector(onTimeout) 
                                               userInfo:nil 
-                                               repeats:NO] retain];
+                                               repeats:NO];
 }
 
 
@@ -535,7 +529,7 @@
     [self log:[NSString stringWithFormat:@"requestFinished() %@", responseString]];
     NSArray *data = [responseString componentsSeparatedByString:@":"];
     
-    _sid = [[data objectAtIndex:0] retain];
+    _sid = [data objectAtIndex:0];
     [self log:[NSString stringWithFormat:@"sid: %@", _sid]];
     
     // add small buffer of 7sec (magic xD)
@@ -566,28 +560,25 @@
 }
 
 # pragma mark -
-# pragma mark WebSocket Delegate Methods
+# pragma mark Web Socket Delegate Methods
 
-- (void) webSocketDidClose:(WebSocket*)webSocket 
-{
+- (void)webSocket:(SRWebSocket *)webSocket didCloseWithCode:(NSInteger)code reason:(NSString *)reason wasClean:(BOOL)wasClean {
     [self log:[NSString stringWithFormat:@"Connection closed."]];
     [self onDisconnect];
 }
 
-- (void) webSocketDidOpen:(WebSocket *)ws 
-{
+- (void)webSocketDidOpen:(SRWebSocket *)webSocket {
     [self log:[NSString stringWithFormat:@"Connection opened."]];
+    
 }
 
-- (void) webSocket:(WebSocket *)ws didFailWithError:(NSError *)error 
-{
+- (void)webSocket:(SRWebSocket *)webSocket didFailWithError:(NSError *)error {
     NSLog(@"ERROR: Connection failed with error ... %@", [error localizedDescription]);
     // Assuming this resulted in a disconnect
     [self onDisconnect];
 }
 
-- (void) webSocket:(WebSocket *)ws didReceiveMessage:(NSString*)message 
-{
+- (void)webSocket:(SRWebSocket *)webSocket didReceiveMessage:(NSString *)message {
     [self onData:message];
 }
 
@@ -603,19 +594,7 @@
 
 - (void) dealloc
 {
-    [_host release];
-    [_sid release];
-    [_endpoint release];
-    
-    [_webSocket release];
-    
     [_timeout invalidate];
-    [_timeout release];
-    
-    [_queue release];
-    [_acks release];
-    
-    [super dealloc];
 }
 
 
@@ -634,7 +613,7 @@
     self = [super init];
     if (self)
     {
-        _types = [[NSArray arrayWithObjects: @"disconnect", 
+        _types = [NSArray arrayWithObjects: @"disconnect", 
                   @"connect", 
                   @"heartbeat", 
                   @"message", 
@@ -643,7 +622,7 @@
                   @"ack", 
                   @"error", 
                   @"noop", 
-                  nil] retain];
+                  nil];
     }
     return self;
 }
@@ -683,21 +662,6 @@
 - (NSString *) typeForIndex:(int)index
 {
     return [_types objectAtIndex:index];
-}
-
-- (void)dealloc
-{
-    [_types release];
-    
-    [type release];
-    [pId release];
-    [name release];
-    [ack release];
-    [data release];
-    [args release];
-    [endpoint release];
-    
-    [super dealloc];
 }
 
 @end
