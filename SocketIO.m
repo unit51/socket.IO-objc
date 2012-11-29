@@ -21,11 +21,11 @@
 //
 
 #import "SocketIO.h"
-
+#import "SBJSONCategories.h"
 #import "SRWebSocket.h"
-#import "SBJson.h"
 
-#define DEBUG_LOGS 1
+
+#define DEBUG_LOGS 0
 #define DEBUG_CERTIFICATE 1
 
 static NSString* kInsecureHandshakeURL = @"http://%@:%d/socket.io/1/?t=%d%@";
@@ -133,6 +133,31 @@ static NSString* kSecureXHRURL = @"https://%@:%d/socket.io/1/xhr-polling/%@";
 - (void) disconnect
 {
     [self sendDisconnect];
+
+    BOOL wasConnected = _isConnected;
+    BOOL wasConnecting = _isConnecting;
+    
+    _isConnected = NO;
+    _isConnecting = NO;
+    _sid = nil;
+    
+    [_queue removeAllObjects];
+    
+    // Kill the heartbeat timer
+    if (_timeout != nil) {
+        [_timeout invalidate];
+        _timeout = nil;
+    }
+    
+    // Disconnect the websocket, just in case
+    if (_webSocket != nil) {
+        [_webSocket close];
+    }
+    
+    if ((wasConnected || wasConnecting)
+        && [_delegate respondsToSelector:@selector(socketIODidDisconnect:)]) {
+        [_delegate socketIODidDisconnect:self];
+    }
 }
 
 - (void) sendMessage:(NSString *)data
@@ -201,15 +226,21 @@ static NSString* kSecureXHRURL = @"https://%@:%d/socket.io/1/xhr-polling/%@";
 {
     NSString *urlStr = [NSString stringWithFormat:(_useSecure ? kSecureSocketURL : kInsecureSocketURL), _host, _port, _sid];
     NSURL *url = [NSURL URLWithString:urlStr];
-
+    [_webSocket removeObserver:self forKeyPath:@"readyState"];
     _webSocket = nil;
     
     _webSocket = [[SRWebSocket alloc] initWithURL:url];
     _webSocket.delegate = self;
     [self log:[NSString stringWithFormat:@"Opening %@", url]];
-    [_webSocket open];    
+    [_webSocket open]; 
+    
+    [_webSocket addObserver:self forKeyPath:@"readyState" options:NSKeyValueObservingOptionNew|NSKeyValueObservingOptionOld context:nil];
 }
-
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if(_webSocket.readyState == SR_CLOSED) {
+        [self performSelectorOnMainThread:@selector(onDisconnect) withObject:nil waitUntilDone:NO];
+    }
+}
 - (void) openXHRPolling
 {
     NSString *url = [NSString stringWithFormat:(_useSecure ? kSecureXHRURL : kInsecureXHRURL), _host, _port, _sid];
@@ -590,6 +621,18 @@ static NSString* kSecureXHRURL = @"https://%@:%d/socket.io/1/xhr-polling/%@";
 
     [self log:[NSString stringWithFormat:@"requestFinished() %@", responseString]];
     NSArray *data = [responseString componentsSeparatedByString:@":"];
+    
+    if([data count] == 1) {
+        NSLog(@"ERROR: handshake failed ...");
+        
+        _isConnected = NO;
+        _isConnecting = NO;
+        
+        if ([_delegate respondsToSelector:@selector(socketIOHandshakeFailed:)]) {
+            [_delegate socketIOHandshakeFailed:self];
+        }
+        return;
+    }
     
     _sid = [data objectAtIndex:0];
     [self log:[NSString stringWithFormat:@"sid: %@", _sid]];
